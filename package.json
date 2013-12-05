@@ -1,0 +1,43 @@
+{
+  "name": "webkool-creator",  
+  "description": "Open-source project generator for webkool. Module manager and application launcher",
+  "keywords": [
+    "webkool",
+    "creator",
+    "generator",
+    "project",
+    "module",
+    "manager",
+    "launcher"
+  ],
+
+  "version": "0.1.0",
+  "preferGlobal": true,
+
+  "license":  "Apache License 2.0",
+
+  "author": "haruni.net",
+  "contributors": [ 
+    {
+      "name": "Sebastien Burel",
+      "email": "sb@haruni.net"
+    },
+    {
+      "name":   "Harold Ozouf",
+      "email":  "harold.ozouf@epitech.eu"
+    }
+  ],
+
+  "bin": {
+    "wkb": "./bin/wkb"
+  },
+
+  "dependencies": {
+    "webkool":    "*",
+    "uglifyjs":   "*"
+  },
+  
+  "engines": {
+    "node": "*"
+  }
+}
