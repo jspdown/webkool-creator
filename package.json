@@ -1,5 +1,5 @@
 {
-  "name": "webkool-creator",  
+  "name": "webkool-builder",  
   "description": "Open-source project generator for webkool. Module manager and application launcher",
   "keywords": [
     "webkool",
@@ -33,11 +33,12 @@
   },
 
   "dependencies": {
-    "webkool":    "*",
-    "uglifyjs":   "*"
+    "fs":             "*",
+    "child_process":  "*",
+    "optimist":       "*",
   },
   
   "engines": {
-    "node": "*"
+    "node":   "*"
   }
 }

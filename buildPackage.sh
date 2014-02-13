@@ -12,8 +12,6 @@ BIN='wkb'
 
 #.ts compiling
 
-mkdir ${WK_CREATOR_TMP}
-
 echo "[SRC] .ts compiling"
 	tsc --target ES5 --outDir ${WK_CREATOR_TMP} ${WK_CREATOR_SOURCES}${BIN}'.ts'
 	echo '#! /usr/bin/env node' > ${WK_CREATOR_PACKAGE_BIN}${BIN}
@@ -21,5 +19,4 @@ echo "[SRC] .ts compiling"
 	chmod +x ${WK_CREATOR_PACKAGE_BIN}${BIN}
     echo "compiling ${WK_CREATOR_SOURCES}${BIN}.ts"
 
-tree ${COMPILER_PACKAGE}
 

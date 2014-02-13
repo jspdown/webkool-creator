@@ -8,512 +8,486 @@
 					wkb available 					list modules installed on your computer
 					wkb start 						run the server
 					wkb stop 						stop the server
-					wkb help							quick help / usage
-
+					wkb info 						get project relative information
+					wkb help						quick help / usage
 					wkb build 						generate .js and .css from .wk files
 
 **	config file:	.project.json
 					.modules.json
 
+	todo:
+		- ameliorer le start
+		- mettre en place un include
 
 */
 
 
-/*************************\
-** -- UTILS FUNCTIONs -- **
-\*************************/
-
 
 declare var require;
 declare var process;
+declare var __dirname;
 
-function 	addSlash(elm) {
-	return (elm[elm.length - 1] != '/') ? (elm + '/') : (elm);
+var fs = require('fs');
+var cp = require('child_process');
+
+// -- CONSTANT -- \\
+
+var YESNO = /^(yes)|(y)|(no)|(n)$/;
+
+// -- EXCEPTIONS -- \\
+
+function BadArgument(msg) {
+	var err = Error.call(this, msg);
+	err.name = 'BadArgument';
+	return (err);
 }
 
-function 	isInArray(a, e) {
-	if (a.indexOf(e) == -1)
-		return (false);
-	return (true);
-}
 
-var usage = function () {
-	console.log('Usage:\twk <command>\n');
-	console.log('where <command> is one of:');
-	console.log('\tcreate, build, add, remove, list, available, start, stop, help');
-	console.log('');
-	console.log('wk action [options]\tquick help on <cmd>');
-}
+// -- BUILDER -- \\
 
-/************************\
-** -- MODULE REQUIRE -- **
-\************************/
-
-
-var fs = 				require('fs');
-var childProcess = 		require('child_process');
-
-class 	Builder {
-	projectFile;
-	moduleFile;
-	webkoolFile;
+class 		Builder {
 	options;
-	action;
+	project;
 	config;
-	folders;
+	needProject;
 
-	constructor(action, options) {
-		this.action = action;
-		this.options = options;
+	constructor(options, project, config) {
+		this.options 		= options;
+		this.project 		= project;
+		this.config 		= config;
+		this.needProject 	= ['add', 'remove', 'list', 'build', 'start', 'stop', 'info'];
+	}
 
-		this.config = {
-			projectName:  			'no-name',
-			webkoolLibraryPath: 	'../',
-			version: 				'0.1.0',
-			modules: 				[]
+	public run() {
+		this.__checkProject();
+			
+		try { this[this.options.action](this.options.argument) } 
+		catch (e) { 
+			if (e.name === 'TypeError') 	{ throw Error('unknow option [' + this.options.action + ']' + e) }
+			if (e.name === 'BadArgument') 	{ throw BadArgument('bad argument:' + e.message) }
+			else 							{ throw (e.message) }
+		}
+		return (this.project);
+	}
+
+	// -- ACTIONS -- \\
+
+	public create(arg) {
+		var self = this;
+		function interCreate(conf, argu) {
+			self.__createFolders(['sources', 'www', 'www-server']);
+			self.__setProjectOptions(argu[0]);
+			self.__cpFile(__dirname  + '/../sources/templates/webkool.wk', './webkool.wk', {});
+			self.__cpFile(__dirname  + '/../sources/templates/index.wk', './index.wk', conf);
+		}
+
+		if (arg.length !== 1 || typeof arg[0] !== 'string')
+			throw BadArgument('you must specify a name for your project');
+		var conf = {
+			name: 	arg[0],
+			port: 	'4242'
 		};
 
-		this.folders = ['sources', 'www', 'www-server'];
+		if (this.project !== null) {
+			if (this.__ask('do you want to overwrite this project?', YESNO, function (data) {
+				if (data === 'yes' || data === 'y')
+					interCreate(conf, arg);
+				process.exit();
+			}))
+			return (false);
+		}
+		else {
+			interCreate(conf, arg);
+		}	
+	}
 
-		this.projectFile = '.project.json';
-		this.moduleFile = 'module.json';
-		this.webkoolFile = '.webkool.wk';
+	public add(arg) {
+		if (arg.length !== 1 || typeof arg[0] !== 'string')
+			throw BadArgument('you must specify a name for the module');
+		if (!this.__checkModule(arg[0]))
+			throw Error('<' + arg[0] + '> file not found');
+		if (this.project.module.indexOf(arg[0]) !== -1)
+			throw Error('<' + arg[0] + '> already add');
+		this.project.module.push(arg[0]);
+		var mods = this.__getModules(true);
+		var modsString = this.__prepareModuleInjection(mods);
+		this.__cpFile(
+			__dirname + '/../sources/templates/webkool.wk', 
+			'./sources/webkool.wk', 
+			modsString
+		);
+		this.config.needSave = true;
+	}
 
-		if (this[this.action] !== undefined) {
-			try {
-				this[this.action]();
-			} catch (e) {
-				console.log('[ERROR]:\t' + e);
+	public remove(arg) {
+		if (arg.length !== 1 || typeof arg[0] !== 'string')
+			throw BadArgument('you must specify a name for the module');
+		var idx = this.project.module.indexOf(arg[0])
+		if (idx === -1)
+			throw Error('module not added');
+		this.project.module.splice(idx, 1);
+		var mods = this.__getModules(true);
+		var modsString = this.__prepareModuleInjection(mods);
+		this.__cpFile(
+			__dirname + '/../sources/templates/webkool.wk',
+			'./sources/webkool.wk',
+			modsString
+		);
+		this.config.needSave = true;
+	}
+
+	public list(arg) {
+		var mods = this.__getModules(false);
+		if (!mods.length)
+			process.stdout.write('no module added\n');
+		else
+			process.stdout.write('module already added:\n');
+		mods.forEach(function (itm) {
+			process.stdout.write('\t- ' + itm + '\n');
+		});
+	}
+
+	public available(arg) {
+		var modules = fs.readdirSync(this.config.modulePath);
+		if (!modules)
+			process.stdout.write('No modules available on your system\n');
+		process.stdout.write('Modules available:\n');
+		modules.forEach(function (itm) {
+			process.stdout.write('\t- ' + itm + '\n');
+		});
+	}
+
+	public help(arg) {
+		console.log('## WebKool Creator ##\n');
+		console.log('USAGE: \twkb action [args]');
+		console.log('ACTIONS:');
+		console.log('\tcreate\t\t', 	'[name] create a new webkool project');
+		console.log('\tadd\t\t', 		'[name] add a new module on the project');
+		console.log('\tremove\t\t', 	'[name] remove the module');
+		console.log('\tlist\t\t', 		'list installed modules');
+		console.log('\tavailable\t', 	'list available modules');
+		console.log('\tbuild\t\t', 		'build the project');
+		console.log('\tstart\t\t', 		'start application');
+		console.log('\tstop\t\t', 		'stop application');
+		console.log('\tinfo\t\t', 		'get project relative information');
+		console.log('\thelp\t\t', 		'quick help');
+	}
+
+	public build(arg) {
+		this.__compileProjectFor('client');
+		this.__compileProjectFor('server');
+	}
+
+	public start(arg) {
+		var pid = this.__getPid();
+		if (pid)
+			console.log('server is already running');
+		else {
+			var command = 'node';
+			var args = ['./www-server/' + this.project.name + '.js'];
+			var out = fs.openSync('./stdout.log', 'a');
+			var err = fs.openSync('./errout.log', 'a');
+			console.log('stating server on port 4242');
+			var child = cp.spawn(command, args, { detached: true, stdio: [ 'ignore', out, err ] });
+			child.unref();
+			console.log(child.pid);
+			this.__setPid(child.pid);
+			this.config.needSave = true;
+		}
+	}
+
+	public stop(arg) {
+		var pid = this.__getPid();
+		if (!pid)
+			console.log('server isn\'t running');
+		else {
+			process.kill(pid, process.SIGINT);
+			this.__setPid(null);
+			this.config.needSave = true;
+		}
+	}
+
+	public info(arg) {
+		console.log('name:\t\t', this.project.name);
+		console.log('version:\t', this.project.version);
+		console.log('module used:');
+		if (this.project.module.length == 0) { console.log('\t\t none') }
+		else {
+			this.project.module.forEach(function (itm) {
+				console.log('\t\t-', itm);
+			});
+		}
+	}
+
+	// -- FILE SYSTEM OPERATIONS -- \\
+
+	private __createFolders(folders) {
+		folders.forEach(function (name) {
+			process.stdout.write('creating folder ' + name + '\n');
+			try { fs.mkdirSync(name) }
+			catch (e) {
+				if (e.code !== 'EEXIST') { throw (e) }
 			}
+		});
+	}
+
+	private __cpFile(from, to, transform) {
+		process.stdout.write('copying ' + from + ' to ' + to + '\n');
+		var data = fs.readFileSync(from, 'utf8');
+		if (transform != null)
+			data = this.__injectInBuffer(data, transform);
+		fs.writeFileSync(to, data);
+	}
+	// -- GETTER -- \\
+
+	private __getPid() {
+		if (this.project.hasOwnProperty('pid'))
+			return (this.project.pid);
+		return (null);
+	}
+
+	private __getModules(content) {
+		var mods = [];
+		var self = this;
+		this.project.module.forEach(function (itm) {
+			if (content) {
+				var data = fs.readFileSync(self.config.modulePath + itm + '/.module.json');
+				mods.push(JSON.parse(data));
+			}
+			else { mods.push(itm) }
+
+		});
+		return (mods);
+	}
+
+	// -- SETTER -- \\
+
+	private __setPid(pid) {
+		if (pid == null) {
+			if (this.project.hasOwnProperty('pid'))
+				delete this.project.pid;
 		}
 		else
-			console.log('[ERROR]:\tUnknow action ' + this.action + '.');
+			this.project.pid = pid;
 	}
 
-	help() { usage() }
-
-	/*****************\
-	** -- ACTIONS -- **
-	\*****************/
-
-
-	available() {
-		console.log('[AVAILABLE]');
-		this.loadConfigFile();
-		var folders = fs.readdirSync(this.config.webkoolLibraryPath + "/modules/");
-		for (var i = 0; i < folders.length; i++)
-			console.log('\t- ' + folders[i]);
+	private __setProjectOptions(name) {
+		this.project = {
+			name: 		name,
+			version: 	this.config.version,
+			module: 	[]
+		};
+		this.config.needSave = true;
 	}
 
-	start() {
-		console.log('[START]');
-		this.loadConfigFile();
-		var _this = this;
-		
-		this.getProcess(function (pid) {
-			if (pid == '') {
-				console.log('[INFO]:\tStarting node server (' + './www-server/' + _this.config.projectName + '.min.js' + ').');
-				var child = childProcess.spawn('node', ['./www-server/' + _this.config.projectName + '.min.js'], { detached: true });
-				child.stdout.on('data', function (data) {
-					console.log(data.toString());
-					//process.exit(1);
-				});
-				child.stderr.on('data', function (data) {
-					console.log(data.toString());
-					//process.exit(1);
-				});
-			}
-			else
-				console.log('[INFO]:\tServer already running.');
-		});
-	}
+	// -- CHECKER -- \\
 
-	stop() {
-		console.log('[STOP]');
-		this.loadConfigFile();
-		this.getProcess(function (pid) {
-			if (pid == '')
-				console.log('[INFO]:\tServer isn\'t start.');
-			else {
-				try {
-					process.kill(pid, 'SIGINT');
-					console.log('[INFO]:\tServer stopped.');
-				} catch (e) {
-					console.log('[ERROR]:\tProcess already killed.');
-
-				}
-			}
-		});
-	}
-
-	list() {
-		console.log('[LIST]');
-		this.loadConfigFile();
-		if (this.config.modules.length == 0)
-			console.log('[INFO]:\t- No modules yet.');
-		for (var i = 0; i < this.config.modules.length; i++)
-			console.log('\t- ' + this.config.modules[i]);
-	}
-
-	create() {
-		console.log('[CREATE]');
-		if (this.options.str[0] !== undefined)
-			this.config.projectName = this.options.str[0];
-		if (this.options['-l'] !== undefined)
-			this.config.webkoolLibraryPath = this.options['-l'];
-		console.log('[INFO]:\t\t[1]-Generating folders.');
-		this.generateFolders();
-		console.log('[INFO]:\t\t[2]-Saving project in ' + this.projectFile + '.');
-		this.writeProjectFile();
-		console.log('[INFO]:\t\t[3]-Generating index.wk.');
-		this.createIndexWkFile();
-		console.log('[INFO]:\t\t[4]-Generate entry point: .webkool.wk.');
-		this.createWebKoolWkFile();
-	}
-
-	remove() {
-		console.log('[REMOVE]');
-		if (this.options.str.length == 0)
-			console.log('[ERROR]:\tYou must specify a module name.');
-		else {
-			this.loadConfigFile();
-			for (var i = 0; i < this.options.str.length; i++) {
-				if (isInArray(this.config.modules, this.options.str[i]) == true) {
-					this.config.modules.splice(this.config.modules.indexOf(this.options.str[i]), 1);
-					console.log('[INFO]:\t-Removing ' + this.options.str[i] + '.');
-				}
-				else
-					console.log('[ERROR]:\t-' + this.options.str[i] + ' isn\'t added.');
-			}
-			this.writeProjectFile();
-			this.createWebKoolWkFile();
-		}
-	}
-
-	add() {
-		console.log('[ADD]');
-		if (this.options.str.length == 0)
-			console.log('[ERROR]:\tYou must specify a module name.');
-		else {
-			this.loadConfigFile();
-			var modules = [];
-			for (var i = 0; i < this.config.modules.length; i++) {
-				if (isInArray(modules, this.config.modules[i]) == false)
-					modules.push(this.options.str[i]);
-			}
-			for (var i = 0; i < this.options.str.length; i++) {
-				if (isInArray(modules, this.options.str[i]) == false)
-					modules.push(this.options.str[i]);
-			}
-			this.config.modules = modules;
-			this.writeProjectFile();
-			this.createWebKoolWkFile();
-		}
-	}
-
-	build() {
-		console.log('[BUILD]');
-		var _this = this;
-		this.loadConfigFile();
-		this.compileFile('-server', function () {
-			_this.compileFile('-client', function () {
-				_this.cssMinification(function () {
-					_this.jsMinification('./www-server/', function () {
-						_this.jsMinification('./www/', function () {
-							console.log("[INFO]:\tBuild finished.");
-						});
-					});
-				});
-			});
-		});
-	}
-
-	/*****************\
-	** -- GETTERS -- **
-	\*****************/
-
-	getProcess(callback) {
-		var cmd = 'ps -xco,pid,command,args | grep "' + this.config.projectName + '.min.js" | grep -v grep | cut -d " " -f1';
-		childProcess.exec(cmd, function (err, stdout) {
-			var pid = stdout;
-			callback(pid);
-		});
-	}
-
-	getModule() {
-		var modulesJSON = [];
-		for (var i = 0; i < this.config.modules.length; i++) {
-			var file = this.config.webkoolLibraryPath + '/modules/' + this.config.modules[i] + '/module.json';
-			try {
-				var data = fs.readFileSync(file);
-				modulesJSON.push(JSON.parse(data));
-			} catch (e) { console.log('[ERROR]:\tUnknow module: ' + file + '.') }
-		}
-		return (modulesJSON);
-	}
-
-	/**************************\
-	** -- WRITING FUNCTIONS -- **
-	\**************************/
-
-	createIndexWkFile() {
-		var data =	'<?xml version="1.0" encoding="UTF-8"?>\n';
-		data +=		'<application xmlns="http://www.webkool.net/1.0/">\n';
-		data +=			'<include href=".webkool.wk" />\n';
-		data +=			'<property id="name">test</property>\n';
-		data +=			'<property id="port">4242</property>\n';
-		data +=			'<client>\n';
-		data +=			'</client>\n';
-		data +=			'<server>\n';
-		data +=				'<handler url="/" type="text/html">\n';
-		data +=					'<template system="square"><![CDATA[\n';
-		data +=						'<h1>Hello World!</h1>\n';
-		data +=					']]></template>\n';
-		data +=				'</handler>';
-		data +=			'</server>\n';
-		data +=		'</application>\n';
-
-		fs.writeFileSync('index.wk', data, 'utf-8');
-	}
-
-	createWebKoolWkFile() {
-		var file = this.config.path + "/.webkool.wk";
-		var modules = this.getModule();
-
-		var xml =	'<?xml version="1.0" encoding="UTF-8"?>\n';
-		xml +=		'<application xmlns="http://www.webkool.net/1.0/">\n';
-		xml +=			'<client>\n';
-		xml +=				"<include href='webkool.js' />\n";
-		xml +=				"<include href='square_lib.js' />\n";
-		xml +=				"<include href='hogan-2.0.0.js' />\n";
-	 
-		for (var i = 0; i < modules.length; i++) {
-			for (var j = 0; j < modules[i].clientInclude.length; j++)
-				xml += 		'<include href="modules/' + modules[i].name + "/" + modules[i].clientInclude[j] + '"/>\n';
-		}
-
-		xml +=				'<script>\n';
-		xml += 					'var application = new Application();\n';
-
-		for (var i = 0; i < modules.length; i++) {
-			if (modules[i].clientInit != "")
-				xml += modules[i].clientInit + '\n';
-		}
-
-		xml +=				'</script>\n';
-		xml +=			'</client>\n';
-		xml +=			'<server>\n';
-		xml +=				"<include href='webkool.js' />\n";
-
-		for (var i = 0; i < modules.length; i++) {
-			for (var j = 0; j < modules[i].serverInclude.length; j++)
-				xml += '	<include href="' + this.config.webkoolLibraryPath + '/modules/' + modules[i].name + "/" + modules[i].serverInclude[j] + '"/>\n';
-		}
-
-		xml +=				'<script>\n';
-		xml += 				'	var application = new Server();\n';
-
-		for (var i = 0; i < modules.length; i++) {
-			if (modules[i].serverInit != "")
-				xml += modules[i].serverInit + '\n';
-		}
-		xml +=				'</script>\n';
-		xml +=			'</server>\n';
-		xml += 		'</application>\n';
-
-		fs.writeFile(this.webkoolFile, xml, function (err) {
-			if (err)
-				console.log("[ERROR]:\tCan't write in file " + this.webkoolFile);
-		});
-	}
-
-	writeProjectFile() {
-		var _this = this;
-		fs.writeFile(this.projectFile, JSON.stringify(this.config, null, 4), function (e) {
-			if (e) { console.log('[ERROR]:\tCan\'t write in ' + _this.projectFile + '.') }
-		});
-	}
-
-	loadConfigFile() {
-		try {
-			this.config = JSON.parse(fs.readFileSync(this.projectFile, 'utf-8'));
-		} catch (e) { console.log('[ERROR]:\tCan\'t read in ' + this.projectFile) }
-	}
-
-	generateFolders() {
-		var onError = function (e) {
-			if (e && e.code != 'EEXIST') { console.log('[ERROR]:\t' + e) }
-		}
-		for (var i = 0; i < this.folders.length; i++) {
-			fs.mkdir(this.folders[i], onError);
-
-			console.log('[INFO]:\t\t\t-' + this.folders[i] + ' created.');
-		}
-	}
-
-	compileFile(mode, callback) {
-		var msg = '';
-		var folder = (mode == '-server') ? './www-server/' : './www/';
-		if (mode == '-server')
-			console.log('[INFO]:\t- generating www-server files:');
-		else if (mode == '-client')
-			console.log('[INFO]:\t- generating www files:');
-		else { console.log('[ERROR]:\tbad mode: please use -server or -client'); return; }
-		var child = childProcess.spawn(this.config.webkoolLibraryPath + '/wkc', [
-			mode,
-			'-i',
-			'./',
-			'-i',
-			this.config.webkoolLibraryPath,
-			'-o',
-			 folder + this.config.projectName,
-			'index.wk'
-		]);
-		child.stdout.value = '';
+	private __updatePid(pid) {
+		var command = 'ps';
+		var args = ['-p', pid];
+		var child = cp.spawn(command, args);
+		var self = this;
 		child.stdout.on('data', function (data) {
-			this.value += data.toString();
+			var res = data.toString();
+			if (data.toString().split('\n') <= 1)
+				self.__setPid(null);
 		});
-		child.stdout.on('end', function (data) {
-			console.log(this.value);
-			callback();
-		})
 	}
 
-	cssMinification(callback) {
-		console.log('[INFO]:\t- Css minification');
-		var child = childProcess.spawn('less', [
-			'-yui-compress',
-			'./www/' + this.config.projectName + '.css',
-			'./www/' + this.config.projectName + '.min.css'
-		]);
-		child.stdout.value = '';
-		child.stdout.on('data', function (data) {
-			this.value += data.toString();
+	private __checkProject() {
+		if (this.project == null) {
+			if (this.needProject.indexOf(this.options.action) === -1)
+				return (true);
+			throw Error('Not a webkool directory (or not build by the webkool builder)');
+		}
+		var p = this.project;
+		if (!p.hasOwnProperty('name') ||
+			!p.hasOwnProperty('version') ||
+			!p.hasOwnProperty('module'))
+			throw Error('.project.json: missing attribute');
+		if (typeof p.name !== 'string' || typeof p.version !== 'string' || typeof p.module !== 'object')
+			throw Error('.project.json: bad type for attribute');
+		if (this.project.hasOwnProperty('pid'))
+			this.__updatePid(this.project.pid);
+		return (true);
+	}
+
+	private __checkModule(name) {
+		var path = this.config.modulePath + name + '/.module.json';
+		try { fs.statSync(this.config.modulePath + name + '/.module.json') }
+		catch (ignore) { return (false) }
+		return (true);
+	}
+
+	// -- PREPARE -- \\
+
+	private __prepareModuleInjection(module) {
+		var res = {
+			scriptClient: 	'',
+			scriptServer: 	'',
+			initClient: 	'',
+			initServer: 	''
+		}
+		var sb = '<script href=\''; var se = '\'></script>\n';
+		module.forEach(function (itm) {
+			res.scriptClient += (itm.scriptClient) 	? (sb + itm.scriptClient + se) : ('');
+			res.scriptServer += (itm.scriptServer) 	? (sb + itm.scriptServer + se) : ('');
+			res.initClient += (itm.initClient) 		? (itm.initClient + '\n') : ('');
+			res.initServer += (itm.initServer) 		? (itm.initServer + '\n') : ('');
 		});
-		child.stdout.on('end', function (data) {
-			console.log(this.value);
-			callback();
-		})
+		return (res);
 	}
 
-	jsMinification(dest, callback) {
-		console.log('[INFO]:\t- Js ' + dest + ' minification:');
-		var child = childProcess.spawn('uglifyjs', [
-			dest + this.config.projectName + '.js',
-			'--source-map',
-			dest + this.config.projectName + '.min.map',
-			'-o',
-			dest + this.config.projectName + '.min.js',
-			'-m'
-		]);
-		child.stdout.value = '';
+	// -- OTHERS -- \\
+
+	private __injectInBuffer(buffer, model) {
+		var re = /\{\{ (\w+) \}\}/g;
+		buffer = buffer.replace(re, function (match, isolated) {
+			return (model[isolated] || '');
+		});
+		return (buffer);
+	}
+
+	private __ask(question, format, callback) {
+		process.stdin.resume();
+		process.stdout.write(question + '  ');
+		var self = this;
+		process.stdin.once('data', function (data) {
+			var res = data.toString().trim();
+			if (format.test(res)) { return (callback(res)); }
+			else { return (self.__ask(question, format, callback)) }
+		});
+	}
+
+	private __compileProjectFor(mode) {
+		var command = 'wkc';
+		var args = ['--server', '-o', './www-server/' + this.project.name, 'index.wk'];
+		if (mode == 'client')
+			args = ['--client', '-o', './www/' + this.project.name, 'index.wk'];
+
+		var child = cp.spawn(command, args);
+		var res = '';
+		var err = '';
+
 		child.stdout.on('data', function (data) {
-			this.value += data.toString();
-		})
-		child.stdout.on('end', function (data) {
-			console.log(this.value);
-			callback();
+			res += data.toString();
+		});
+		child.stderr.on('data', function (data) {
+			err += data.toString();
+		});
+		child.on('close', function () {
+			process.stdout.write('-- ' + mode + ' build\n');
+			process.stdout.write(res + '\n');
+			process.stdout.write(err + '\n');
 		})
 	}
-
 }
 
-/* -- CMD LINE PARSE -- */
 
 
 
-function 	parseCMD(argc, argv) {
-	var cmd = [
-		{ name: 'create', argument:  [] },
-		{ name: 'add', argument:  [] },
-		{ name: 'remove', argument:  [] },
-		{ name: 'list', argument:  [] },
-		{ name: 'available', argument:  [] },
-		{ name: 'build', argument:  [] },
-		{ name: 'start', argument:  [] },
-		{ name: 'stop', argument:  [] },
-		{ name: 'help', argument:  [] }
-	];
 
-	var option = {
-		str: []
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// -- .PROJECT OPERATIONS -- \\
+
+function 	readProject(config) {
+	var data 	= '';
+	var project = {};
+
+	try { data = fs.readFileSync(config.projectFile, 'utf-8') }
+	catch (ignore) { return (null) }
+	try { project = JSON.parse(data) }
+	catch (e) { throw Error('project file corrupted') }
+	return (project);
+}
+
+function 	writeProject(config, project) {
+	if (config.needSave && project != null)
+		fs.writeFileSync(config.projectFile, JSON.stringify(project, null, 4));
+}
+
+// -- COMMAND LINE PARSING -- \\
+
+function 	parseCmd(config) {
+	var options = {
+		action: 	'help',
+		argument: 	[]
+	}
+	var argv = require('optimist')
+			.alias('c', 'create')
+			.alias('a', 'add')
+			.alias('r', 'remove')
+			.alias('l', 'list')
+			.alias('d', 'available')
+			.alias('b', 'build')
+			.alias('f', 'info')
+			.alias('h', 'help')
+			.boolean(['list', 'start', 'stop', 'help', 'build', 'available', 'info'])
+			.string(['create', 'add', 'remove'])
+			.describe('create', 	'[name] create a new webkool project')
+			.describe('add', 		'[name] add a new module on the project')
+			.describe('remove', 	'[name] remove the module')
+			.describe('list', 		'list installed modules')
+			.describe('available', 	'list available modules')
+			.describe('build', 		'build the project')
+			.describe('start', 		'start application')
+			.describe('stop', 		'stop application')
+			.describe('info', 		'get project relative info')
+			.describe('help', 		'quick help')
+			.usage('$0' + ' version: ' + config.version)
+			.argv;
+	if (argv.create) 	{ options.action = 'create'; 	options.argument = [argv.create] }
+	if (argv.add) 		{ options.action = 'add'; 		options.argument = [argv.add] }
+	if (argv.remove) 	{ options.action = 'remove'; 	options.argument = [argv.remove] }
+	if (argv.list) 		{ options.action = 'list' }
+	if (argv.available) { options.action = 'available' }
+	if (argv.build) 	{ options.action = 'build' }
+	if (argv.start) 	{ options.action = 'start' }
+	if (argv.stop) 		{ options.action = 'stop' }
+	if (argv.info) 		{ options.action = 'info' }
+	if (argv.help) 		{ options.action = 'help' }
+
+	return (options);
+}
+
+// -- ENTRY POINT -- \\
+
+function	main() {
+	var config = {
+		version: 		'0.0.1',
+		projectFile: 	'.project.json',
+		needSave: 		false,
+		modulePath: 	__dirname + '/../modules/'
 	};
+	var options;
+	var project;
+	var builder;
 
-	var next = false;
-
-	var currentCmd = getCMDName(argv[2], cmd);
-	for (var i = 3; i < argc; i++) {
-		next = false;
-		if (argv[i][0] != '-') {
-			option['str'].push(argv[i]);
-			next = true;
-		}
-		else {
-			for (var j = 0; j < currentCmd.argument.length; j++) {
-				if (argv[i] == currentCmd.argument[j]) {
-					if (i < argc) {
-						option[currentCmd.argument[j]] = argv[i + 1];
-						i++;
-					}
-					next = true;
-				}
-			}
-			if (next == false) 
-				throw Error("unknow argument " + argv[i]);
-		}
-	}
-
-	return ({
-		'action':	currentCmd.name,
-		'options':	option
-	});
-}
-
-function	getCMDName(str, cmd) {
-	for (var i = 0; i < cmd.length; i++) {
-		if (str == cmd[i].name) {
-			return (cmd[i]);
-		}
-	}
-	throw Error('Unknow command ' + str);
-}
-
-
-/* -- ENTRY POINT == */
-
-
-
-function	main(argc, argv) {
 	try {
-		var parsed = parseCMD(argc, argv);
-		var builder = new Builder(parsed.action, parsed.options);
+		options = parseCmd(config);
+		project = readProject(config);
+		builder = new Builder(options, project, config);
+		project = builder.run();
+
+		writeProject(config, project);
 	}
-	catch (e) {
-		usage();
-	}	
+	catch (e) { process.stdout.write('An error occured:\n' + '\t' + e + '\n') }
 }
 
-
-main(process.argv.length, process.argv);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+main();
 

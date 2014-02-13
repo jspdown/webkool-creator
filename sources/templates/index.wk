@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application xmlns="http://www.webkool.net/1.0/">
+
+	<property id="name">{{ name }}</property>
+	<property id="port">{{ port }}</property>
+
+	<client></client>
+
+	<server>
+		<handler url="/" type="text/html">
+			<template system='square'>
+				<![CDATA[
+					<h1>Hello world</h1>
+				]]>
+			</template>
+		</handler>
+	</server>
+</application>
